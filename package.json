@@ -1,0 +1,35 @@
+{
+  "name": "logic-questions",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Library for building question on propositional logic",
+  "type": "module",
+  "scripts": {
+    "test": "mocha test/",
+    "build": "webpack"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/redelmann/logic-questions.git"
+  },
+  "keywords": [
+    "propositional logic",
+    "logic",
+    "questions"
+  ],
+  "author": "Romain Edelmann",
+  "license": "Apache-2.0",
+  "bugs": {
+    "url": "https://github.com/redelmann/logic-questions/issues"
+  },
+  "homepage": "https://github.com/redelmann/logic-questions#readme",
+  "devDependencies": {
+    "eslint": "^8.10.0",
+    "mocha": "^10.2.0",
+    "webpack": "^5.69.1",
+    "webpack-cli": "^4.9.2"
+  },
+  "dependencies": {
+    "logic-solver": "^2.0.1"
+  }
+}
