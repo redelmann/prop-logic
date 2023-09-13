@@ -13,9 +13,11 @@ export class Part {
         this.actual_dependents = {};
         this.id = root.nextId();
         this.fixed = false;
+        this.deleted = false;
     }
 
     _delete() {
+        this.deleted = true;
         Object.values(this.actual_dependents).forEach(dependent =>
             dependent.removeDependency(this));
         this.parent.unlinkPart(this);
@@ -93,9 +95,9 @@ export class Line extends Part {
     toJSON() {
         return {
             type: "line",
-            expr: exprToString(this.expr),
-            rule: this.rule.name,
-            refs: this.refs.map(ref => ref === null ? null : ref.range),
+            expr: this.expr !== null ? exprToString(this.expr) : null,
+            rule: this.rule !== null ? this.rule.name : null,
+            refs: this.refs.map(ref => ref !== null ? ref.range : null),
         };
     }
 
@@ -190,7 +192,7 @@ export class Line extends Part {
         if (this.rule === null) {
             errors.push("missing");
         }
-        else if (this.expr && !unify(this.rule.expr, this.expr)) {
+        else if (this.expr !== null && !unify(this.rule.expr, this.expr)) {
             errors.push("inapplicable");
         }
         return errors;
@@ -227,6 +229,9 @@ export class Line extends Part {
                     if (!(ref instanceof Line)) {
                         errors.push("wrong_type");
                     }
+                    else if (ref.expr === null) {
+                        errors.push("missing_expr");
+                    }
                     else if (!unify(expr, ref.expr)) {
                         errors.push("wrong_expr");
                     }
@@ -237,10 +242,17 @@ export class Line extends Part {
                         errors.push("wrong_type");
                     }
                     else {
-                        if (!unify(assumption, ref.assumption.expr)) {
+                        if (ref.assumption.expr === null) {
+                            errors.push("missing_assumption");
+                        }
+                        else if (!unify(assumption, ref.assumption.expr)) {
                             errors.push("wrong_assumption");
                         }
-                        if (!unify(conclusion, ref.conclusion.expr)) {
+
+                        if (ref.conclusion.expr === null) {
+                            errors.push("missing_conclusion");
+                        }
+                        else if (!unify(conclusion, ref.conclusion.expr)) {
                             errors.push("wrong_conclusion");
                         }
                     }
@@ -323,7 +335,14 @@ export class Subproof extends Part {
         this.conclusion = new Line(this.root, this, 1);
         this.conclusion.fixed = true;
         this.parts = [];
-        this.size = 2;
+    }
+
+    get size() {
+        let size = 2;
+        for (let i = 0; i < this.parts.length; i++) {
+            size += this.parts[i].size;
+        }
+        return size;
     }
 
     _delete() {
@@ -362,7 +381,6 @@ export class Subproof extends Part {
         }
         const line = new Line(this.root, this, position);
         this.parts.splice(position - 1, 0, line);
-        this.size++;
         this.root.renumber();
         return line;
     }
@@ -373,7 +391,6 @@ export class Subproof extends Part {
         }
         const subproof = new Subproof(this.root, this, position);
         this.parts.splice(position - 1, 0, subproof);
-        this.size++;
         this.root.renumber();
         return subproof;
     }
@@ -382,7 +399,6 @@ export class Subproof extends Part {
         const index = this.parts.indexOf(part);
         if (index !== -1) {
             this.parts.splice(index, 1);
-            this.size -= part.size;
             return true;
         }
         else {
@@ -419,11 +435,18 @@ export class Proof {
 
     constructor() {
         this.parts = [];
-        this.size = 0;
         this.number = 1;
         this.lines = {};
         this.subproofs = {};
         this.next_free_id = 1;
+    }
+
+    get size() {
+        let size = 0;
+        for (let i = 0; i < this.parts.length; i++) {
+            size += this.parts[i].size;
+        }
+        return size;
     }
 
     nextId() {
@@ -438,23 +461,34 @@ export class Proof {
     static fromJSON(json) {
         const proof = new Proof();
 
+        // First pass: create all parts
+        // Second pass: set all refs
+        const ref_callbacks = [];
+
         function handle_line(line, part) {
-            const expr = parse(part.expr);
-            line.setExpr(expr);
+            const expr = part.expr !== null ? parse(part.expr) : null;
+            if (expr) {
+                line.setExpr(expr);
+            }
             const rule = rules.find(rule => rule.name === part.rule);
-            line.setRule(rule);
+            if (rule) {
+                line.setRule(rule);
+            }
             for (let j = 0; j < part.refs.length; j++) {
-                if (part.refs[j] !== null) {
-                    const is_range = part.refs[j].indexOf("-") !== -1;
-                    if (is_range) {
-                        const subproof = proof.lookupSubproof(part.refs[j]);
-                        line.setRef(j, subproof);
-                    }
-                    else {
-                        const other_line = proof.lookupLine(part.refs[j]);
-                        line.setRef(j, other_line);
+                function handle_ref() {
+                    if (part.refs[j] !== null) {
+                        const is_range = part.refs[j].indexOf("-") !== -1;
+                        if (is_range) {
+                            const subproof = proof.lookupSubproof(part.refs[j]);
+                            line.setRef(j, subproof);
+                        }
+                        else {
+                            const other_line = proof.lookupLine(part.refs[j]);
+                            line.setRef(j, other_line);
+                        }
                     }
                 }
+                ref_callbacks.push(handle_ref);
             }
         }
 
@@ -486,6 +520,10 @@ export class Proof {
             }
         }
 
+        for (let i = 0; i < ref_callbacks.length; i++) {
+            ref_callbacks[i]();
+        }
+
         return proof;
     }
                 
@@ -507,7 +545,7 @@ export class Proof {
 
         const outdated_parts = new Set();
         const outdated_dependents = new Set();
-
+        
         function check_changed(part) {
             if (part instanceof Line) {
                 if (old_lines[part.number] !== part) {
@@ -550,7 +588,6 @@ export class Proof {
         }
         const line = new Line(this, this, position);
         this.parts.splice(position, 0, line);
-        this.size++;
         this.renumber();
         return line;
     }
@@ -561,7 +598,6 @@ export class Proof {
         }
         const subproof = new Subproof(this, this);
         this.parts.splice(position, 0, subproof);
-        this.size++;
         this.renumber();
         return subproof;
     }
@@ -570,7 +606,6 @@ export class Proof {
         const index = this.parts.indexOf(part);
         if (index !== -1) {
             this.parts.splice(index, 1);
-            this.size -= part.size;
             return true;
         }
         else {

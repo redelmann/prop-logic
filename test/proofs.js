@@ -123,4 +123,68 @@ describe("Proof", function () {
         proof.deletePart(line4);
         proof.display();
     });
+
+    it("should be able to be parsed from a string.", function() {
+        const json = [
+            {
+              "type": "line",
+              "expr": "P implique Q",
+              "rule": "hypothesis",
+              "refs": []
+            },
+            {
+              "type": "line",
+              "expr": "non Q",
+              "rule": "hypothesis",
+              "refs": []
+            },
+            {
+              "type": "subproof",
+              "assumption": {
+                "type": "line",
+                "expr": "P",
+                "rule": "assumption",
+                "refs": []
+              },
+              "parts": [
+                {
+                  "type": "line",
+                  "expr": "Q",
+                  "rule": "implE",
+                  "refs": [
+                    "1",
+                    "3"
+                  ]
+                }
+              ],
+              "conclusion": {
+                "type": "line",
+                "expr": "faux",
+                "rule": "notE",
+                "refs": [
+                  "2",
+                  "4"
+                ]
+              }
+            },
+            {
+              "type": "line",
+              "expr": "non P",
+              "rule": "notI",
+              "refs": [
+                "3-5"
+              ]
+            },
+            {
+              "type": "line",
+              "expr": "P implique faux",
+              "rule": "implI",
+              "refs": [
+                "3-5"
+              ]
+            }
+          ];
+        const proof = Proof.fromJSON(json);
+        proof.display();
+    }); 
 });
