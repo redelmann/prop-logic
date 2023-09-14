@@ -43,6 +43,9 @@ export class Part {
         for (let i = 0; i < this.listeners.length; i++) {
             this.listeners[i](event);
         }
+        if (event.forward) {
+            this.parent.notify(event);
+        }
     }
 
     get dependents() {
@@ -90,6 +93,7 @@ export class Line extends Part {
         this.refs_listeners = [];
         this.size = 1;
         this.listeners = [];
+        this.status_cache = null;
     }
 
     toJSON() {
@@ -99,6 +103,11 @@ export class Line extends Part {
             rule: this.rule !== null ? this.rule.name : null,
             refs: this.refs.map(ref => ref !== null ? ref.range : null),
         };
+    }
+
+    setDirty() {
+        this.status_cache = null;
+        this.parent.setDirty();
     }
 
     display(indent) {
@@ -140,14 +149,17 @@ export class Line extends Part {
     }
 
     setExpr(expr) {
+        this.setDirty();
         this.expr = expr;
-        this.notify({ message: "expr_changed" });
+        this.notify({ message: "expr_changed", forward: true });
         this.dependents.forEach(dependent => {
-            dependent.notify({ message: "ref_expr_changed" });
+            dependent.setDirty();
+            dependent.notify({ message: "ref_expr_changed", forward: true });
         });
     }
 
     setRule(rule) {
+        this.setDirty();
         this.rule = rule;
 
         if (rule === null) {
@@ -157,10 +169,11 @@ export class Line extends Part {
             const size = rule.parts.length + rule.subproofs.length;
             this.refs = new Array(size).fill(null);
         }
-        this.notify({ message: "rule_changed" });
+        this.notify({ message: "rule_changed", forward: true });
     }
 
     setRef(index, ref) {
+        this.setDirty();
         if (this.refs[index] !== null) {
             this.refs[index].removeDependent(this);
         }
@@ -168,7 +181,7 @@ export class Line extends Part {
         if (ref !== null) {
             ref.addDependent(this);
         }
-        this.notify({ message: "ref_changed", index: index });
+        this.notify({ message: "ref_changed", index: index, forward: true });
     }
 
     removeDependency(dependency) {
@@ -271,6 +284,10 @@ export class Line extends Part {
     }
 
     get status() {
+        if (this.status_cache !== null) {
+            return this.status_cache;
+        }
+
         const result = {
             expr: this.expr_status,
             rule: this.rule_status,
@@ -290,6 +307,16 @@ export class Line extends Part {
             }
         }
 
+        let only_missing = true;
+        if (result.rule.length > 1 || (result.length > 0 && result.rule[0] !== "missing")) {
+            only_missing = false;
+        }
+        for (let i = 0; i < result.refs.length; i++) {
+            if (result.refs[i].length > 1 || (result.refs[i].length > 0 && result.refs[i][0] !== "missing")) {
+                only_missing = false;
+            }
+        }
+
         if (ok) {
             const parts = [];
             const subproofs = [];
@@ -302,16 +329,16 @@ export class Line extends Part {
                     subproofs.push([ref.assumption.expr, ref.conclusion.expr]);
                 }
             }
-            if (this.rule.check(this.expr, parts, subproofs)) {
-                result.checked = true;
-            }
-            else {
-                result.checked = false;
+            if (!this.rule.check(this.expr, parts, subproofs)) {
+                only_missing = false;
                 ok = false;
             }
         }
 
         result.ok = ok;
+        result.only_missing = only_missing;
+
+        this.status_cache = result;
         return result;
     }
 
@@ -335,6 +362,55 @@ export class Subproof extends Part {
         this.conclusion = new Line(this.root, this, 1);
         this.conclusion.fixed = true;
         this.parts = [];
+        this.status_cache = null;
+    }
+
+    setDirty() {
+        this.parent.setDirty();
+        this.status_cache = null;
+    }
+
+    get status() {
+        if (this.status_cache !== null) {
+            return this.status_cache;
+        }
+
+        let ok = true;
+        let only_missing = true;
+
+        const assumption_status = this.assumption.status;
+        if (!assumption_status.ok) {
+            ok = false;
+            if (!assumption_status.only_missing) {
+                only_missing = false;
+            }
+        }
+
+        const conclusion_status = this.conclusion.status;
+        if (!conclusion_status.ok) {
+            ok = false;
+            if (!conclusion_status.only_missing) {
+                only_missing = false;
+            }
+        }
+
+        for (let i = 0; i < this.parts.length; i++) {
+            const part_status = this.parts[i].status;
+            if (!part_status.ok) {
+                ok = false;
+                if (!part_status.only_missing) {
+                    only_missing = false;
+                }
+            }
+        }
+
+        const result = {
+            ok: ok,
+            only_missing: only_missing
+        };
+
+        this.status_cache = result;
+        return result;
     }
 
     get size() {
@@ -382,6 +458,8 @@ export class Subproof extends Part {
         const line = new Line(this.root, this, position);
         this.parts.splice(position - 1, 0, line);
         this.root.renumber();
+        this.setDirty();
+        this.notify({ message: "line_added", forward: true });
         return line;
     }
 
@@ -392,10 +470,13 @@ export class Subproof extends Part {
         const subproof = new Subproof(this.root, this, position);
         this.parts.splice(position - 1, 0, subproof);
         this.root.renumber();
+        this.setDirty();
+        this.notify({ message: "subproof_added", forward: true });
         return subproof;
     }
 
     unlinkPart(part) {
+        this.setDirty();
         const index = this.parts.indexOf(part);
         if (index !== -1) {
             this.parts.splice(index, 1);
@@ -451,6 +532,14 @@ export class Proof {
 
     nextId() {
         return this.next_free_id++;
+    }
+
+    setDirty() {
+        // Do nothing
+    }
+
+    notify(event) {
+        // Do nothing
     }
 
     deletePart(part) {
@@ -576,13 +665,12 @@ export class Proof {
             }
         }
 
-        outdated_parts.forEach(part => part.notify({ message: "renumbered" }));
-        outdated_dependents.forEach(dependent => dependent.notify({ message: "ref_renumbered" }));
+        outdated_parts.forEach(part => part.notify({ message: "renumbered", forward: false }));
+        outdated_dependents.forEach(dependent => dependent.notify({ message: "ref_renumbered", forward: false }));
     }
 
-    
-
     newLine(position) {
+        this.setDirty();
         if (position === undefined) {
             position = this.parts.length;
         }
@@ -593,6 +681,7 @@ export class Proof {
     }
 
     newSubproof(position) {
+        this.setDirty();
         if (position === undefined) {
             position = this.parts.length;
         }
@@ -603,6 +692,7 @@ export class Proof {
     }
 
     unlinkPart(part) {
+        this.setDirty();
         const index = this.parts.indexOf(part);
         if (index !== -1) {
             this.parts.splice(index, 1);
