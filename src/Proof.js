@@ -23,6 +23,41 @@ export class Part {
         this.parent.unlinkPart(this);
     }
 
+    transitiveDependents() {
+        const trans_dependents = new Set();
+        const working_list = [];
+
+        add_dependent(this);
+        
+        function add_dependent(dependent) {
+            if (!trans_dependents.has(dependent)) {
+                dependent.setDirty();
+                trans_dependents.add(dependent);
+                working_list.push(dependent);
+            }
+        }
+
+        while (working_list.length > 0) {
+            const part = working_list.pop();
+
+            part.dependents.forEach(add_dependent);
+            if (part.parent) {
+                add_dependent(part.parent);
+            }
+        }
+
+        return trans_dependents;
+    }
+
+    notifyAll(event) {
+        const trans_dependents = this.transitiveDependents();
+
+        // Notify all dependents that transitively_ok has changed
+        trans_dependents.forEach(dependent => {
+            dependent.notify(event);
+        });
+    }
+
     renumber(n, p) {
         this.number = n;
         this.position = p;
@@ -42,9 +77,6 @@ export class Part {
     notify(event) {
         for (let i = 0; i < this.listeners.length; i++) {
             this.listeners[i](event);
-        }
-        if (event.forward) {
-            this.parent.notify(event);
         }
     }
 
@@ -151,11 +183,8 @@ export class Line extends Part {
     setExpr(expr) {
         this.setDirty();
         this.expr = expr;
-        this.notify({ message: "expr_changed", forward: true });
-        this.dependents.forEach(dependent => {
-            dependent.setDirty();
-            dependent.notify({ message: "ref_expr_changed", forward: true });
-        });
+        this.notify({ message: "expr_changed" });
+        this.notifyAll({ message: "dirty" });
     }
 
     setRule(rule) {
@@ -169,7 +198,8 @@ export class Line extends Part {
             const size = rule.parts.length + rule.subproofs.length;
             this.refs = new Array(size).fill(null);
         }
-        this.notify({ message: "rule_changed", forward: true });
+        this.notify({ message: "rule_changed" });
+        this.notifyAll({ message: "dirty" });
     }
 
     setRef(index, ref) {
@@ -181,7 +211,8 @@ export class Line extends Part {
         if (ref !== null) {
             ref.addDependent(this);
         }
-        this.notify({ message: "ref_changed", index: index, forward: true });
+        this.notify({ message: "ref_changed", index: index });
+        this.notifyAll({ message: "dirty" });
     }
 
     removeDependency(dependency) {
@@ -308,7 +339,7 @@ export class Line extends Part {
         }
 
         let only_missing = true;
-        if (result.rule.length > 1 || (result.length > 0 && result.rule[0] !== "missing")) {
+        if (result.rule.length > 1 || (result.rule.length > 0 && result.rule[0] !== "missing")) {
             only_missing = false;
         }
         for (let i = 0; i < result.refs.length; i++) {
@@ -317,11 +348,15 @@ export class Line extends Part {
             }
         }
 
+        let transitively_ok = ok;
         if (ok) {
             const parts = [];
             const subproofs = [];
             for (let i = 0; i < this.refs.length; i++) {
                 const ref = this.refs[i];
+                if (!ref.status.transitively_ok) {
+                    transitively_ok = false;
+                }
                 if (ref instanceof Line) {
                     parts.push(ref.expr);
                 }
@@ -337,6 +372,7 @@ export class Line extends Part {
 
         result.ok = ok;
         result.only_missing = only_missing;
+        result.transitively_ok = transitively_ok;
 
         this.status_cache = result;
         return result;
@@ -366,8 +402,8 @@ export class Subproof extends Part {
     }
 
     setDirty() {
-        this.parent.setDirty();
         this.status_cache = null;
+        this.parent.setDirty();
     }
 
     get status() {
@@ -404,9 +440,25 @@ export class Subproof extends Part {
             }
         }
 
+        let transitively_ok =
+            ok &&
+            this.assumption.status.transitively_ok &&
+            this.conclusion.status.transitively_ok;
+        
+        if (transitively_ok) {
+            for (let i = 0; i < this.parts.length; i++) {
+                const part_status = this.parts[i].status;
+                if (!part_status.transitively_ok) {
+                    transitively_ok = false;
+                    break;
+                }
+            }
+        }
+
         const result = {
             ok: ok,
-            only_missing: only_missing
+            only_missing: only_missing,
+            transitively_ok: transitively_ok
         };
 
         this.status_cache = result;
@@ -439,18 +491,6 @@ export class Subproof extends Part {
         };
     }
 
-    addDependent(dependent) {
-        super.addDependent(dependent);
-        this.assumption.addDependent(dependent);
-        this.conclusion.addDependent(dependent);
-    }
-
-    removeDependent(dependent) {
-        super.removeDependent(dependent);
-        this.assumption.removeDependent(dependent);
-        this.conclusion.removeDependent(dependent);
-    }
-
     newLine(position) {
         if (position === undefined) {
             position = this.parts.length + 1;
@@ -459,7 +499,8 @@ export class Subproof extends Part {
         this.parts.splice(position - 1, 0, line);
         this.root.renumber();
         this.setDirty();
-        this.notify({ message: "line_added", forward: true });
+        this.notify({ message: "line_added" });
+        this.notifyAll({ message: "dirty" });
         return line;
     }
 
@@ -471,7 +512,8 @@ export class Subproof extends Part {
         this.parts.splice(position - 1, 0, subproof);
         this.root.renumber();
         this.setDirty();
-        this.notify({ message: "subproof_added", forward: true });
+        this.notify({ message: "subproof_added" });
+        this.notifyAll({ message: "dirty" });
         return subproof;
     }
 
@@ -520,6 +562,7 @@ export class Proof {
         this.lines = {};
         this.subproofs = {};
         this.next_free_id = 1;
+        this.dependents = [];
     }
 
     get size() {
@@ -543,8 +586,12 @@ export class Proof {
     }
 
     deletePart(part) {
+        const dependents = part.transitiveDependents();
         part._delete();
         this.renumber();
+        dependents.forEach(dependent =>
+            dependent.notify({ message: "dirty" })
+        );
     }
 
     static fromJSON(json) {
@@ -665,8 +712,8 @@ export class Proof {
             }
         }
 
-        outdated_parts.forEach(part => part.notify({ message: "renumbered", forward: false }));
-        outdated_dependents.forEach(dependent => dependent.notify({ message: "ref_renumbered", forward: false }));
+        outdated_parts.forEach(part => part.notify({ message: "renumbered" }));
+        outdated_dependents.forEach(dependent => dependent.notify({ message: "ref_renumbered" }));
     }
 
     newLine(position) {

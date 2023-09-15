@@ -294,10 +294,13 @@ export function exprToString(expression) {
   return iffToString(expression);
 }
 
-export function verboseExprToString(expression, parens) {
+export function semiVerboseExprToString(expression, parens) {
   function go(expr) {
     if (expr.kind == "Variable") {
       return expr.name;
+    }
+    if (expr.kind == "MetaVariable") {
+      return "?" + expr.name;
     }
     if (expr.kind == "Constant") {
       return expr.value ? "vrai" : "faux";
@@ -306,7 +309,7 @@ export function verboseExprToString(expression, parens) {
     const post = parens ? ")" : "";
 
     if (expr.kind == "Not") {
-      return pre + "non " + verboseExprToString(expr.inner, true) + post;
+      return pre + "non " + semiVerboseExprToString(expr.inner, true) + post;
     }
 
     let op;
@@ -342,11 +345,61 @@ export function verboseExprToString(expression, parens) {
     }
     
     return pre +
-      verboseExprToString(expr.left, true) + " " + op + " " + 
-      verboseExprToString(expr.right, expr.right.kind !== expr.kind && expr.right.kind !== "Not") + post;
+      semiVerboseExprToString(expr.left, true) + " " + op + " " + 
+      semiVerboseExprToString(expr.right, expr.right.kind !== expr.kind && expr.right.kind !== "Not") + post;
   }
 
   return go(expression, false);
+}
+
+export function verboseExprToString(expression, parens) {
+  function inParens(string) {
+    if (parens) {
+      return "(" + string + ")";
+    }
+    else {
+      return string;
+    }
+  }
+
+  switch (expression.kind) {
+    case "Variable":
+      return expression.name;
+    case "MetaVariable":
+      return "?" + expression.name;
+    case "Constant":
+      return expression.value ? "vrai" : "faux";
+    case "Not":
+      return inParens("non " + verboseExprToString(expression.inner, true));
+    case "And":
+      return inParens(verboseExprToString(expression.left, true) +
+                      " et " +
+                      verboseExprToString(expression.right, true));
+    case "Nand":
+      return inParens(verboseExprToString(expression.left, true) +
+                      " non-et " +
+                      verboseExprToString(expression.right, true));
+    case "Or":
+      return inParens(verboseExprToString(expression.left, true) +
+                      " ou " + 
+                      verboseExprToString(expression.right, true));
+    case "Nor":
+      return inParens(verboseExprToString(expression.left, true) +
+                      " non-ou " +
+                      verboseExprToString(expression.right, true));
+    case "Xor":
+      return inParens(verboseExprToString(expression.left, true) +
+                      " ou-x " +
+                      verboseExprToString(expression.right, true));
+    case "Implies":
+      return inParens(verboseExprToString(expression.left, true) +
+                      " implique " +
+                      verboseExprToString(expression.right, true));
+    case "Iff":
+      return inParens(verboseExprToString(expression.left, true) +
+                      " ssi " +
+                      verboseExprToString(expression.right, true));
+  }
 }
 
 export function evaluate(expr, interpretation) {
