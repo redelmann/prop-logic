@@ -120,6 +120,7 @@ export class Line extends Part {
         super(root, parent, position);
 
         this.expr = null;
+        this.malformed_expr = false;
         this.rule = null;
         this.refs = [];
         this.refs_listeners = [];
@@ -180,9 +181,18 @@ export class Line extends Part {
         console.log(s);
     }
 
+    setMalformedExpr() {
+        this.setDirty();
+        this.expr = null;
+        this.malformed_expr = true;
+        this.notify({ message: "expr_changed" });
+        this.notifyAll({ message: "dirty" });
+    }
+
     setExpr(expr) {
         this.setDirty();
         this.expr = expr;
+        this.malformed_expr = false;
         this.notify({ message: "expr_changed" });
         this.notifyAll({ message: "dirty" });
     }
@@ -225,7 +235,10 @@ export class Line extends Part {
 
     get expr_status() {
         const errors = [];
-        if (this.expr === null) {
+        if (this.malformed_expr) {
+            errors.push("malformed");
+        }
+        else if (this.expr === null) {
             errors.push("missing");
         }
         return errors;
@@ -339,6 +352,9 @@ export class Line extends Part {
         }
 
         let only_missing = true;
+        if (result.expr.length > 1 || (result.expr.length > 0 && result.expr[0] !== "missing")) {
+            only_missing = false;
+        }
         if (result.rule.length > 1 || (result.rule.length > 0 && result.rule[0] !== "missing")) {
             only_missing = false;
         }
@@ -366,6 +382,7 @@ export class Line extends Part {
             }
             if (!this.rule.check(this.expr, parts, subproofs)) {
                 only_missing = false;
+                transitively_ok = false;
                 ok = false;
             }
         }
@@ -946,6 +963,11 @@ export const rules = [
     hypothesis,
     assumption
 ];
+
+export const rules_by_name = {};
+for (let i = 0; i < rules.length; i++) {
+    rules_by_name[rules[i].name] = rules[i];
+}
 
 export const rules_long_names = {
     "trueI": "Introduction de vrai",

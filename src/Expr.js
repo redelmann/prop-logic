@@ -42,6 +42,30 @@ export function exprEqual(left, right) {
   }
 }
 
+export function collectMetaVariables(expression) {
+  const vars = new Set([]);
+
+  function go(expr) {
+  switch(expr.kind) {
+  case "MetaVariable":
+    vars.add(expr.name);
+    break;
+  case "Variable":
+  case "Constant":
+    break;
+  case "Not":
+    go(expr.inner);
+    break;
+  default:
+    go(expr.left);
+    go(expr.right);
+    break;
+  }
+  }
+
+  go(expression);
+  return Array.from(vars).sort();
+}
 
 export function meta(name) {
   return { kind: MetaVariable, name: name };
