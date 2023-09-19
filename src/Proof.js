@@ -127,6 +127,35 @@ export class Line extends Part {
         this.size = 1;
         this.listeners = [];
         this.status_cache = null;
+        this.refs_status_cache = [];
+    }
+
+    get refs_lines() {
+        if (this.rule === null) {
+            return [];
+        }
+        else {
+            const lines = [];
+            for (let i = 0; i < this.rule.parts.length; i++) {
+                const ref = this.refs[i];
+                lines.push(ref);
+            }
+            return lines;
+        }
+    }
+
+    get refs_subproofs() {
+        if (this.rule === null) {
+            return [];
+        }
+        else {
+            const subproofs = [];
+            for (let i = 0; i < this.rule.subproofs.length; i++) {
+                const ref = this.refs[this.rule.parts.length + i];
+                subproofs.push(ref);
+            }
+            return subproofs;
+        }
     }
 
     toJSON() {
@@ -140,6 +169,7 @@ export class Line extends Part {
 
     setDirty() {
         this.status_cache = null;
+        this.refs_status_cache = new Array(this.refs.length).fill(null);
         this.parent.setDirty();
     }
 
@@ -198,7 +228,6 @@ export class Line extends Part {
     }
 
     setRule(rule) {
-        this.setDirty();
         this.rule = rule;
 
         if (rule === null) {
@@ -208,6 +237,7 @@ export class Line extends Part {
             const size = rule.parts.length + rule.subproofs.length;
             this.refs = new Array(size).fill(null);
         }
+        this.setDirty();
         this.notify({ message: "rule_changed" });
         this.notifyAll({ message: "dirty" });
     }
@@ -256,7 +286,12 @@ export class Line extends Part {
     }
 
     ref_status(i) {
+        if (this.refs_status_cache[i] !== null) {
+            return this.refs_status_cache[i];
+        }
+
         const errors = [];
+        let template = null;
         const ref = this.refs[i];
         if (ref === null) {
             errors.push("missing");
@@ -274,49 +309,104 @@ export class Line extends Part {
                     }
                 }
             }
-            let specs = null;
             if (this.expr !== null) {
-                specs = this.rule.parts_and_subproof_specs(this.expr);
-            }
-
-            if (specs !== null) {
-                const [parts_specs, subproofs_specs] = specs;
-                if (i < parts_specs.length) {
-                    const expr = parts_specs[i];
-                    if (!(ref instanceof Line)) {
-                        errors.push("wrong_type");
+                function computeTemplate() {
+                    const constraints = [];
+                    const expr_constraints = getConstraints(this.rule.expr, this.expr);
+                    if (expr_constraints === null) {
+                        return null;
                     }
-                    else if (ref.expr === null) {
-                        errors.push("missing_expr");
+                    constraints.push(...expr_constraints);
+                    for (let j = 0; j < Math.min(this.rule.parts.length, i); j++) {
+                        if (this.refs[j] === null || (!this.refs[j] instanceof Line) || this.refs[j].expr === null) {
+                            continue;
+                        }
+                        if (this.ref_status(j).errors.length > 0) {
+                            continue;
+                        }
+                        const part_constraints = getConstraints(this.rule.parts[j], this.refs[j].expr);
+                        if (part_constraints === null) {
+                            return null;
+                        }
+                        constraints.push(...part_constraints);
                     }
-                    else if (!unify(expr, ref.expr)) {
-                        errors.push("wrong_expr");
+                    for (let j = 0; j < Math.min(this.rule.subproofs.length, i - this.rule.parts.length); j++) {
+                        if (this.refs[j + this.rule.parts.length] === null || (!this.refs[j + this.rule.parts.length] instanceof Subproof)) {
+                            continue;
+                        }
+                        if (this.ref_status(j + this.rule.parts.length).errors.length > 0) {
+                            continue;
+                        }
+                        if (this.refs[j + this.rule.parts.length].assumption.expr !== null) {
+                            const assumption_constraints = getConstraints(this.rule.subproofs[j][0], this.refs[j + this.rule.parts.length].assumption.expr);
+                            if (assumption_constraints === null) {
+                                return null;
+                            }
+                            constraints.push(...assumption_constraints);
+                        }
+                        if (this.refs[j + this.rule.parts.length].conclusion.expr !== null) {
+                            const conclusion_constraints = getConstraints(this.rule.subproofs[j][1], this.refs[j + this.rule.parts.length].conclusion.expr);
+                            if (conclusion_constraints === null) {
+                                return null;
+                            }
+                            constraints.push(...conclusion_constraints);
+                        }
                     }
-                }
-                else {
-                    const [assumption, conclusion] = subproofs_specs[i - parts_specs.length];
-                    if (!(ref instanceof Subproof)) {
-                        errors.push("wrong_type");
+                    const solution = solveConstraints(constraints);
+                    if (solution === null) {
+                        return null;
+                    }
+                    if (i < this.rule.parts.length) {
+                        return substituteMetaVariables(this.rule.parts[i], solution);
                     }
                     else {
-                        if (ref.assumption.expr === null) {
-                            errors.push("missing_assumption");
-                        }
-                        else if (!unify(assumption, ref.assumption.expr)) {
-                            errors.push("wrong_assumption");
-                        }
+                        return [
+                            substituteMetaVariables(this.rule.subproofs[i - this.rule.parts.length][0], solution),
+                            substituteMetaVariables(this.rule.subproofs[i - this.rule.parts.length][1], solution)
+                        ];
+                    }
 
-                        if (ref.conclusion.expr === null) {
-                            errors.push("missing_conclusion");
-                        }
-                        else if (!unify(conclusion, ref.conclusion.expr)) {
-                            errors.push("wrong_conclusion");
-                        }
+
+                }
+                template = computeTemplate.bind(this)();
+            }
+
+        
+            if (i < this.rule.parts.length) {
+                if (!(ref instanceof Line)) {
+                    errors.push("wrong_type");
+                }
+                else if (ref.expr === null) {
+                    errors.push("missing_expr");
+                }
+                else if (template !== null && !unify(template, ref.expr)) {
+                    errors.push("wrong_expr");
+                }
+            }
+            else {
+                if (!(ref instanceof Subproof)) {
+                    errors.push("wrong_type");
+                }
+                else {
+                    if (ref.assumption.expr === null) {
+                        errors.push("missing_assumption");
+                    }
+                    else if (template !== null && !unify(template[0], ref.assumption.expr)) {
+                        errors.push("wrong_assumption");
+                    }
+
+                    if (ref.conclusion.expr === null) {
+                        errors.push("missing_conclusion");
+                    }
+                    else if (template !== null && !unify(template[1], ref.conclusion.expr)) {
+                        errors.push("wrong_conclusion");
                     }
                 }
             }
         }
-        return errors;
+        const result = { errors: errors, template: template };
+        this.refs_status_cache[i] = result;
+        return result;
     }
 
     get refs_status() {
@@ -346,7 +436,7 @@ export class Line extends Part {
             ok = false;
         }
         for (let i = 0; i < result.refs.length; i++) {
-            if (result.refs[i].length > 0) {
+            if (result.refs[i].errors.length > 0) {
                 ok = false;
             }
         }
@@ -359,7 +449,7 @@ export class Line extends Part {
             only_missing = false;
         }
         for (let i = 0; i < result.refs.length; i++) {
-            if (result.refs[i].length > 1 || (result.refs[i].length > 0 && result.refs[i][0] !== "missing")) {
+            if (result.refs[i].errors.length > 1 || (result.refs[i].errors.length > 0 && result.refs[i].errors[0] !== "missing")) {
                 only_missing = false;
             }
         }
@@ -823,6 +913,63 @@ export class Rule {
 
     parts_and_subproof_specs(expr) {
         const solution = unify(this.expr, expr);
+        if (solution === null) {
+            return null;
+        }
+
+        const parts_specs = [];
+        for (let i = 0; i < this.parts.length; i++) {
+            const part = substituteMetaVariables(this.parts[i], solution);
+            parts_specs.push(part);
+        }
+
+        const subproofs_specs = [];
+        for (let i = 0; i < this.subproofs.length; i++) {
+            const assumption = substituteMetaVariables(this.subproofs[i][0], solution);
+            const conclusion = substituteMetaVariables(this.subproofs[i][1], solution);
+            subproofs_specs.push([assumption, conclusion]);
+        }
+
+        return [parts_specs, subproofs_specs];
+    }
+
+    parts_and_subproof_specs_all(expr, parts, subproofs) {
+        const all_constraints = [];
+        const expr_constraints = getConstraints(this.expr, expr);
+        if (expr_constraints === null) {
+            return null;
+        }
+        all_constraints.push(...expr_constraints);
+
+        for (let i = 0; i < this.parts.length; i++) {
+            if (parts[i] === null || !(parts[i] instanceof Line)) {
+                continue;
+            }
+            const part_constraints = getConstraints(this.parts[i], parts[i].expr);
+            if (part_constraints !== null) {
+                all_constraints.push(...part_constraints);
+            }
+        }
+
+        for (let i = 0; i < this.subproofs.length; i++) {
+            if (subproofs[i] === null || !(subproofs[i] instanceof Subproof)) {
+                continue;
+            }
+            if (subproofs[i].assumption !== null) {
+                const assumption_constraints = getConstraints(this.subproofs[i][0], subproofs[i].assumption.expr);
+                if (assumption_constraints !== null) {
+                    all_constraints.push(...assumption_constraints);
+                }
+            }
+            if (subproofs[i].conclusion !== null) {
+                const conclusion_constraints = getConstraints(this.subproofs[i][1], subproofs[i].conclusion.expr);
+                if (conclusion_constraints !== null) {
+                    all_constraints.push(...conclusion_constraints);
+                }
+            }
+        }
+
+        const solution = solveConstraints(all_constraints);
         if (solution === null) {
             return null;
         }
