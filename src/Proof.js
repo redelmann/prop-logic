@@ -291,7 +291,70 @@ export class Line extends Part {
         }
 
         const errors = [];
-        let template = null;
+
+        function computeTemplate() {
+            const constraints = [];
+            if (this.expr === null) {
+                return null;
+            }
+            const expr_constraints = getConstraints(this.rule.expr, this.expr);
+            if (expr_constraints === null) {
+                return null;
+            }
+            constraints.push(...expr_constraints);
+            for (let j = 0; j < Math.min(this.rule.parts.length, i); j++) {
+                if (this.refs[j] === null || (!this.refs[j] instanceof Line) || this.refs[j].expr === null) {
+                    continue;
+                }
+                if (this.ref_status(j).errors.length > 0) {
+                    continue;
+                }
+                const part_constraints = getConstraints(this.rule.parts[j], this.refs[j].expr);
+                if (part_constraints === null) {
+                    return null;
+                }
+                constraints.push(...part_constraints);
+            }
+            for (let j = 0; j < Math.min(this.rule.subproofs.length, i - this.rule.parts.length); j++) {
+                if (this.refs[j + this.rule.parts.length] === null || (!this.refs[j + this.rule.parts.length] instanceof Subproof)) {
+                    continue;
+                }
+                if (this.ref_status(j + this.rule.parts.length).errors.length > 0) {
+                    continue;
+                }
+                if (this.refs[j + this.rule.parts.length].assumption.expr !== null) {
+                    const assumption_constraints = getConstraints(this.rule.subproofs[j][0], this.refs[j + this.rule.parts.length].assumption.expr);
+                    if (assumption_constraints === null) {
+                        return null;
+                    }
+                    constraints.push(...assumption_constraints);
+                }
+                if (this.refs[j + this.rule.parts.length].conclusion.expr !== null) {
+                    const conclusion_constraints = getConstraints(this.rule.subproofs[j][1], this.refs[j + this.rule.parts.length].conclusion.expr);
+                    if (conclusion_constraints === null) {
+                        return null;
+                    }
+                    constraints.push(...conclusion_constraints);
+                }
+            }
+            const solution = solveConstraints(constraints);
+            if (solution === null) {
+                return null;
+            }
+            if (i < this.rule.parts.length) {
+                return substituteMetaVariables(this.rule.parts[i], solution);
+            }
+            else {
+                return [
+                    substituteMetaVariables(this.rule.subproofs[i - this.rule.parts.length][0], solution),
+                    substituteMetaVariables(this.rule.subproofs[i - this.rule.parts.length][1], solution)
+                ];
+            }
+
+
+        }
+        let template = computeTemplate.bind(this)();
+
         const ref = this.refs[i];
         if (ref === null) {
             errors.push("missing");
@@ -309,68 +372,6 @@ export class Line extends Part {
                     }
                 }
             }
-            if (this.expr !== null) {
-                function computeTemplate() {
-                    const constraints = [];
-                    const expr_constraints = getConstraints(this.rule.expr, this.expr);
-                    if (expr_constraints === null) {
-                        return null;
-                    }
-                    constraints.push(...expr_constraints);
-                    for (let j = 0; j < Math.min(this.rule.parts.length, i); j++) {
-                        if (this.refs[j] === null || (!this.refs[j] instanceof Line) || this.refs[j].expr === null) {
-                            continue;
-                        }
-                        if (this.ref_status(j).errors.length > 0) {
-                            continue;
-                        }
-                        const part_constraints = getConstraints(this.rule.parts[j], this.refs[j].expr);
-                        if (part_constraints === null) {
-                            return null;
-                        }
-                        constraints.push(...part_constraints);
-                    }
-                    for (let j = 0; j < Math.min(this.rule.subproofs.length, i - this.rule.parts.length); j++) {
-                        if (this.refs[j + this.rule.parts.length] === null || (!this.refs[j + this.rule.parts.length] instanceof Subproof)) {
-                            continue;
-                        }
-                        if (this.ref_status(j + this.rule.parts.length).errors.length > 0) {
-                            continue;
-                        }
-                        if (this.refs[j + this.rule.parts.length].assumption.expr !== null) {
-                            const assumption_constraints = getConstraints(this.rule.subproofs[j][0], this.refs[j + this.rule.parts.length].assumption.expr);
-                            if (assumption_constraints === null) {
-                                return null;
-                            }
-                            constraints.push(...assumption_constraints);
-                        }
-                        if (this.refs[j + this.rule.parts.length].conclusion.expr !== null) {
-                            const conclusion_constraints = getConstraints(this.rule.subproofs[j][1], this.refs[j + this.rule.parts.length].conclusion.expr);
-                            if (conclusion_constraints === null) {
-                                return null;
-                            }
-                            constraints.push(...conclusion_constraints);
-                        }
-                    }
-                    const solution = solveConstraints(constraints);
-                    if (solution === null) {
-                        return null;
-                    }
-                    if (i < this.rule.parts.length) {
-                        return substituteMetaVariables(this.rule.parts[i], solution);
-                    }
-                    else {
-                        return [
-                            substituteMetaVariables(this.rule.subproofs[i - this.rule.parts.length][0], solution),
-                            substituteMetaVariables(this.rule.subproofs[i - this.rule.parts.length][1], solution)
-                        ];
-                    }
-
-
-                }
-                template = computeTemplate.bind(this)();
-            }
-
         
             if (i < this.rule.parts.length) {
                 if (!(ref instanceof Line)) {
